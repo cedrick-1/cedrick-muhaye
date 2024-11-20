@@ -1,0 +1,113 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <SoftwareSerial.h>
+#include <BlynkSimpleSerial.h>
+
+#define TRIG_PIN 9
+#define ECHO_PIN 8
+#define RELAY_PIN 7
+#define SOIL_MOISTURE_PIN A0
+
+char auth[] = "Your_Blynk_Auth_Token";
+
+SoftwareSerial gsm(10, 11);
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+int moistureThresholdLow = 400;
+int moistureThresholdHigh = 800;
+
+void setup() {
+  Serial.begin(9600);
+  gsm.begin(9600);
+  Blynk.begin(auth, gsm);
+
+  lcd.begin(16, 2);
+  lcd.init();
+  lcd.backlight();
+
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  pinMode(RELAY_PIN, OUTPUT);
+  pinMode(SOIL_MOISTURE_PIN, INPUT);
+
+  digitalWrite(RELAY_PIN, LOW);
+
+  lcd.setCursor(0, 0);
+  lcd.print("Irrigation System");
+  delay(2000);
+  lcd.clear();
+}
+
+void loop() {
+  Blynk.run();
+  checkMoistureAndWaterLevel();
+}
+
+void checkMoistureAndWaterLevel() {
+  int soilMoistureValue = analogRead(SOIL_MOISTURE_PIN);
+  int soilMoisturePercent = map(soilMoistureValue, 0, 1023, 0, 100);
+  int waterLevel = getWaterLevel();
+
+  lcd.setCursor(0, 0);
+  lcd.print("Soil Moisture:");
+  lcd.setCursor(13, 0);
+  lcd.print(soilMoisturePercent);
+  lcd.print("%");
+
+  lcd.setCursor(0, 1);
+  lcd.print("Water Level:");
+  lcd.setCursor(13, 1);
+  lcd.print(waterLevel);
+  lcd.print("cm");
+
+  Blynk.virtualWrite(V1, soilMoisturePercent);
+  Blynk.virtualWrite(V2, waterLevel);
+
+  if (soilMoisturePercent <= 40 && waterLevel > 20) {
+    digitalWrite(RELAY_PIN, HIGH);
+    Blynk.virtualWrite(V3, 1);
+    sendSMS("Pump activated. Soil is below 40% moisture.");
+    delay(5000);
+  } else if (soilMoisturePercent >= 80) {
+    digitalWrite(RELAY_PIN, LOW);
+    Blynk.virtualWrite(V3, 0);
+    sendSMS("Pump deactivated. Soil moisture reached 80%.");
+  }
+}
+
+int getWaterLevel() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  long duration = pulseIn(ECHO_PIN, HIGH);
+  int distance = duration * 0.034 / 2;
+
+  return distance;
+}
+
+void sendSMS(String message) {
+  gsm.println("AT+CMGF=1");
+  delay(100);
+  gsm.println("AT+CMGS=\"+1234567890\"");
+  delay(100);
+  gsm.print(message);
+  delay(100);
+  gsm.write(26);
+  delay(1000);
+}
+
+BLYNK_WRITE(V4) {
+  int pinValue = param.asInt();
+  if (pinValue == 1 && getWaterLevel() > 20) {
+    digitalWrite(RELAY_PIN, HIGH);
+    Blynk.virtualWrite(V3, 1);
+    sendSMS("Pump manually activated via Blynk.");
+  } else {
+    digitalWrite(RELAY_PIN, LOW);
+    Blynk.virtualWrite(V3, 0);
+    sendSMS("Pump manually deactivated via Blynk.");
+  }
+}
