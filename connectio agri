@@ -1,0 +1,31 @@
+Connections Recap:
+Ultrasonic Sensor (HC-SR04):
+
+TRIG Pin → Pin 9 (Arduino)
+ECHO Pin → Pin 10 (Arduino)
+VCC → 5V on Arduino
+GND → GND on Arduino
+Soil Moisture Sensor:
+
+Analog Output Pin → Pin A0 (Arduino)
+VCC → 5V on Arduino
+GND → GND on Arduino
+Relay Module:
+
+IN Pin → Pin 7 (Arduino)
+NO Pin → Positive terminal of the pump
+COM Pin → 12V positive rail for pump power
+VCC → 5V on Arduino
+GND → GND on Arduino
+GSM Module:
+
+TX Pin → Pin 2 (Arduino)
+RX Pin → Pin 3 (Arduino)
+VCC → 5V (or 4.2V if using an external 5V supply)
+GND → GND on Arduino
+I2C LCD:
+
+SDA Pin → A4 (Arduino Uno)
+SCL Pin → A5 (Arduino Uno)
+VCC → 5V on Arduino
+GND → GND on Arduino
