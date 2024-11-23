@@ -1,0 +1,166 @@
+#include <SoftwareSerial.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+// Pin Definitions
+#define TRIG_PIN 9      // Ultrasonic sensor TRIG
+#define ECHO_PIN 10     // Ultrasonic sensor ECHO
+#define MOISTURE_PIN A0 // Soil moisture sensor
+#define RELAY_PIN 7     // Relay for pump
+#define GSM_RX 2        // GSM RX
+#define GSM_TX 3        // GSM TX
+
+// LCD setup (address 0x27, 16 columns, 2 rows)
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// Thresholds
+int soilMoistureStartThreshold = 400;  // 40% - Soil too dry
+int soilMoistureStopThreshold = 800;   // 80% - Soil sufficiently moist
+int waterLevelThreshold = 20;          // Minimum water level in cm
+
+// GSM Module
+SoftwareSerial gsm(GSM_RX, GSM_TX);
+
+// Additional Variables
+unsigned long pumpStartTime = 0;             // To track pump runtime
+const unsigned long pumpMinRunTime = 30000; // Minimum pump runtime in milliseconds (30 seconds)
+
+void setup() {
+  // Initialize Serial and GSM
+  Serial.begin(9600);
+  gsm.begin(9600);
+
+  // Pin Modes
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  pinMode(RELAY_PIN, OUTPUT);
+  pinMode(MOISTURE_PIN, INPUT);
+
+  // LCD Setup
+  lcd.begin();
+  lcd.backlight();
+
+  // Welcome Message
+  lcd.setCursor(0, 0);
+  lcd.print("Welcome to");
+  lcd.setCursor(0, 1);
+  lcd.print("AgriTech Solution");
+  delay(5000); // Display for 5 seconds
+  lcd.clear();
+
+  // Initial State
+  lcd.setCursor(0, 0);
+  lcd.print("Initializing...");
+  digitalWrite(RELAY_PIN, LOW); // Ensure pump is OFF
+
+  // GSM Setup
+  sendSMS("System initialized and running.");
+  delay(2000); // Wait for GSM module to initialize
+}
+
+void loop() {
+  // Check water level and soil moisture
+  int waterLevel = checkWaterLevel();
+  int soilMoisture = getAverageMoisture();
+
+  // Update LCD with water level and soil moisture
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Water: ");
+  lcd.print(waterLevel);
+  lcd.print(" cm");
+
+  lcd.setCursor(0, 1);
+  lcd.print("Moisture: ");
+  lcd.print(soilMoisture);
+
+  // Control the pump based on water level and soil moisture
+  if (waterLevel > waterLevelThreshold) {
+    controlPump(soilMoisture);  // Pump will only turn on if water level is sufficient
+  } else {
+    // If water level is low, stop the pump and send an alert
+    if (digitalRead(RELAY_PIN) == HIGH) {
+      digitalWrite(RELAY_PIN, LOW); // Ensure pump is OFF
+      sendSMS("Water level is low. Pump deactivated.");
+    }
+    lcd.setCursor(0, 1);
+    lcd.print("Pump: OFF");
+  }
+
+  // Delay before checking again
+  delay(5000); // Check every 5 seconds
+}
+
+// Function to check water level using ultrasonic sensor
+int checkWaterLevel() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  long duration = pulseIn(ECHO_PIN, HIGH);
+  int distance = duration * 0.034 / 2; // Convert to cm
+
+  return distance; // Return distance in cm
+}
+
+// Function to get average soil moisture
+int getAverageMoisture() {
+  int total = 0;
+  const int numReadings = 10;
+
+  for (int i = 0; i < numReadings; i++) {
+    total += analogRead(MOISTURE_PIN);
+    delay(100); // Delay between readings
+  }
+
+  return total / numReadings; // Return the average moisture value
+}
+
+// Function to control pump based on soil moisture
+void controlPump(int soilMoisture) {
+  unsigned long currentTime = millis();
+
+  // Start the pump if moisture is below the threshold (40%) and it hasn't been recently turned on
+  if (soilMoisture < soilMoistureStartThreshold && digitalRead(RELAY_PIN) == LOW) {
+    Serial.println("Soil is too dry. Pump ON.");
+    digitalWrite(RELAY_PIN, HIGH); // Turn pump ON
+    pumpStartTime = currentTime;  // Record the time the pump was turned on
+    sendSMS("Soil is too dry. Pump activated.");
+    lcd.setCursor(0, 1);
+    lcd.print("Pump: ON ");
+  }
+
+  // Stop the pump if:
+  // - Moisture is above the threshold (80%)
+  // - AND the pump has run for at least the minimum runtime
+  else if (soilMoisture > soilMoistureStopThreshold &&
+           digitalRead(RELAY_PIN) == HIGH &&
+           (currentTime - pumpStartTime >= pumpMinRunTime)) {
+    Serial.println("Soil is sufficiently moist. Pump OFF.");
+    digitalWrite(RELAY_PIN, LOW); // Turn pump OFF
+    sendSMS("Soil is sufficiently moist. Pump deactivated.");
+    lcd.setCursor(0, 1);
+    lcd.print("Pump: OFF");
+  } else if (digitalRead(RELAY_PIN) == HIGH) {
+    lcd.setCursor(0, 1);
+    lcd.print("Pump: ON ");
+  } else {
+    lcd.setCursor(0, 1);
+    lcd.print("Pump: OFF");
+  }
+}
+
+// Function to send SMS using GSM module
+void sendSMS(String message) {
+  gsm.println("AT+CMGF=1"); // Set SMS mode
+  delay(100);
+  gsm.println("AT+CMGS=\"+YOUR_PHONE_NUMBER\""); // Replace with your phone number
+  delay(100);
+  gsm.println(message);
+  delay(100);
+  gsm.write(26); // Send Ctrl+Z to send the message
+  delay(1000);
+  Serial.println("SMS sent: " + message);
+}
