@@ -1,0 +1,95 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <SoftwareSerial.h>  // Include the SoftwareSerial library
+
+#define TRIG_PIN 7
+#define ECHO_PIN 6
+#define MOISTURE_PIN A0
+#define RELAY_PIN 10
+
+SoftwareSerial GSM(8, 9); // RX, TX for GSM Module
+LiquidCrystal_I2C lcd(0x27, 16, 2); // Check your LCD's I2C address, e.g., 0x27 or 0x3F
+
+void setup() {
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  pinMode(RELAY_PIN, OUTPUT);
+
+  lcd.init();       // Initialize the LCD (use init() instead of begin())
+  lcd.backlight();  // Turn on the backlight
+  
+  GSM.begin(9600);  // Initialize GSM communication
+  Serial.begin(9600);  // For debugging (optional)
+
+  // Display Welcome Message on LCD
+  lcd.setCursor(0, 0);
+  lcd.print("Welcome to");
+  lcd.setCursor(0, 1);
+  lcd.print("AgriTech Solution");
+  delay(3000);
+
+  // Send System Initiation Message via GSM
+  sendGSM("System initiated. AgriTech Solution ready.");
+
+  // Prepare LCD for Updates
+  lcd.clear();
+}
+
+void loop() {
+  float moisture = analogRead(MOISTURE_PIN) * (100.0 / 1023.0);
+  float waterLevel = measureWaterLevel();
+  
+  bool pumpActivated = false;
+
+  // Check if moisture is below the 80% threshold
+  if (moisture < 80) {
+    if (waterLevel < 45) {
+      sendGSM("Irrigation not started. Low moisture and low water level detected.");
+    } else {
+      digitalWrite(RELAY_PIN, HIGH);
+      pumpActivated = true;
+      sendGSM("Low soil moisture detected, but water level is sufficient. Pump activated.");
+    }
+  } else {
+    sendGSM("Soil moisture is sufficient. Pump not activated.");
+  }
+  
+  if (waterLevel < 45) {
+    sendGSM("Low water level detected. Please refill the tank.");
+  }
+  
+  digitalWrite(RELAY_PIN, pumpActivated ? HIGH : LOW);
+  updateLCD(moisture, waterLevel, pumpActivated);
+}
+
+float measureWaterLevel() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  float duration = pulseIn(ECHO_PIN, HIGH);
+  return (duration / 2) / 29.1;  // Convert to cm
+}
+
+void sendGSM(String message) {
+  GSM.println("AT+CMGS=\"+250XXXXXXXXX\""); // Replace with your phone number
+  delay(1000);
+  GSM.println(message);
+  delay(1000);
+  GSM.write(26); // ASCII code for Ctrl+Z to send the SMS
+  delay(1000);
+}
+
+void updateLCD(float moisture, float waterLevel, bool pumpStatus) {
+  lcd.setCursor(0, 0);
+  lcd.print("P:");
+  lcd.print(pumpStatus ? "ON " : "OFF");
+  lcd.print(" M:");
+  lcd.print(moisture, 1);
+  
+  lcd.setCursor(0, 1);
+  lcd.print("W:");
+  lcd.print(waterLevel, 1);
+  lcd.print(" cm ");
+}
