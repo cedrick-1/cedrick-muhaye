@@ -1,0 +1,160 @@
+#include <LiquidCrystal_I2C.h>
+#include <SoftwareSerial.h>
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+SoftwareSerial gsm(10, 11); // RX, TX for GSM module
+
+// Variables to track the last state of the system
+int lastMoisture = -1;  // -1 means no previous reading, so an event is triggered
+bool lastPumpState = false;  // false: pump OFF, true: pump ON
+
+// Ultrasonic sensor pins
+const int trigPin = 8;
+const int echoPin = 9;
+
+// Tank configuration
+const int tankHeight = 200; // Height of the tank in cm
+const int fullTankDistance = 2; // Distance from sensor to water when the tank is full in cm
+const int emptyTankDistance = tankHeight + fullTankDistance; // Distance when the tank is empty in cm
+
+void setup() {
+  Serial.begin(9600);
+  gsm.begin(9600); // Initialize GSM module
+
+  lcd.init();
+  lcd.backlight();
+  lcd.clear();
+
+  pinMode(2, OUTPUT);
+  digitalWrite(2, HIGH); // Turn off pump initially
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+
+  delay(1000);
+
+  lcd.setCursor(0, 0);
+  lcd.print("IRRIGATION");
+  lcd.setCursor(0, 1);
+  lcd.print("SYSTEM IS ON");
+  delay(3000);
+  lcd.clear();
+
+  // Test GSM module communication
+  if (testGSM()) {
+    sendSMS("Irrigation System is ON");
+  } else {
+    lcd.setCursor(0, 0);
+    lcd.print("GSM ERROR");
+    while (1); // Stop execution if GSM fails
+  }
+}
+
+void loop() {
+  int value = analogRead(A0); // Read soil moisture sensor value
+  Serial.println(value);
+
+  // Check water level
+  int waterLevel = getWaterLevel();
+
+  // Determine the moisture level
+  int moistureState = 0; // 0 = high, 1 = mid, 2 = low
+  if (value < 300) {
+    moistureState = 0;  // High Moisture
+  } else if (value >= 300 && value <= 950) {
+    moistureState = 1;  // Medium Moisture
+  } else {
+    moistureState = 2;  // Low Moisture
+  }
+
+  // Pump control logic
+  bool pumpShouldRun = false;
+
+  if (waterLevel >= 25 && (moistureState == 1 || moistureState == 2)) {
+    pumpShouldRun = true;
+  }
+
+  if (pumpShouldRun && !lastPumpState) {
+    digitalWrite(2, LOW); // Turn on the pump
+    lcd.setCursor(0, 0);
+    lcd.print("Water Pump is ON ");
+    sendSMS("Water Pump is ON. Moisture is LOW or MID.");
+  } else if (!pumpShouldRun && lastPumpState) {
+    digitalWrite(2, HIGH); // Turn off the pump
+    lcd.setCursor(0, 0);
+    lcd.print("Water Pump is OFF");
+    sendSMS("Water Pump is OFF. Moisture is adequate or water is low.");
+  }
+
+  // Display moisture and water level on LCD
+  lcd.setCursor(0, 1);
+  if (moistureState == 0) {
+    lcd.print("Moisture : HIGH ");
+  } else if (moistureState == 1) {
+    lcd.print("Moisture : MID  ");
+  } else {
+    lcd.print("Moisture : LOW  ");
+  }
+
+  // Update pump state for the next cycle
+  lastPumpState = pumpShouldRun;
+
+  delay(5000); // Wait for 5 seconds before reading again
+}
+
+// Function to get water level percentage
+int getWaterLevel() {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  long duration = pulseIn(echoPin, HIGH);
+  int distance = duration * 0.034 / 2; // Convert to distance in cm
+
+  if (distance > emptyTankDistance) {
+    distance = emptyTankDistance;
+  }
+  if (distance < fullTankDistance) {
+    distance = fullTankDistance;
+  }
+
+  int waterLevel = map(distance, emptyTankDistance, fullTankDistance, 0, 100); // Map distance to percentage
+  Serial.print("Water Level: ");
+  Serial.print(waterLevel);
+  Serial.println("%");
+
+  // Display water level on LCD
+  lcd.setCursor(0, 0);
+  lcd.print("Water Lvl: ");
+  lcd.print(waterLevel);
+  lcd.print("%     ");
+
+  return waterLevel;
+}
+
+// Function to check GSM module
+bool testGSM() {
+  gsm.println("AT"); // Send AT command
+  delay(1000);
+  if (gsm.find("OK")) { // If the module responds with OK
+    gsm.println("AT+CSQ"); // Check signal quality
+    delay(1000);
+    if (gsm.find("+CSQ:")) { // Check if signal quality is good
+      gsm.println("AT+CMGF=1"); // Set SMS to Text Mode
+      delay(1000);
+      return true;
+    }
+  }
+  return false; // GSM initialization failed
+}
+
+// Function to send SMS
+void sendSMS(String message) {
+  gsm.println("AT+CMGS=\"+250791523780\""); // Replace with recipient's phone number
+  delay(1000);
+  gsm.print(message); // Send the message
+  delay(500); // Wait for message input
+  gsm.write(26); // Send Ctrl+Z to transmit the SMS
+  delay(5000); // Wait for the message to send
+}
