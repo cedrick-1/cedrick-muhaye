@@ -1,0 +1,163 @@
+#include <LiquidCrystal_I2C.h>
+#include <SoftwareSerial.h>
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+SoftwareSerial gsm(10, 11); // RX, TX for GSM module
+
+// Variables to track the last state of the system
+int lastMoisture = -1;  // -1 means no previous reading, so an event is triggered
+bool lastPumpState = false;  // false: pump OFF, true: pump ON
+
+// Define tank and moisture sensor thresholds
+int moistureThresholdLow = 950;  // Moisture threshold below which pump is turned ON
+int moistureThresholdHigh = 300; // Moisture threshold above which pump is turned OFF
+int tankDistanceThreshold = 2;   // Distance in cm to indicate full tank (100% level)
+
+const int trigPin = 9;  // Pin for Ultrasonic trigger
+const int echoPin = 8;  // Pin for Ultrasonic echo
+
+void setup() {
+  Serial.begin(9600);
+  gsm.begin(9600); // Initialize GSM module
+
+  lcd.init();
+  lcd.backlight();
+  lcd.clear();
+
+  pinMode(2, OUTPUT);
+  digitalWrite(2, HIGH); // Turn off pump initially
+  delay(1000);
+
+  lcd.setCursor(0, 0);
+  lcd.print("IRRIGATION");
+  lcd.setCursor(0, 1);
+  lcd.print("SYSTEM IS ON");
+  delay(3000);
+  lcd.clear();
+
+  // Test GSM module communication
+  if (testGSM()) {
+    sendSMS("Irrigation System is ON");
+  } else {
+    lcd.setCursor(0, 0);
+    lcd.print("GSM ERROR");
+    while (1); // Stop execution if GSM fails
+  }
+
+  // Set up ultrasonic sensor
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+}
+
+void loop() {
+  int moistureValue = analogRead(A0); // Read soil moisture
+  int tankDistance = getWaterLevel();  // Get water level distance from ultrasonic sensor
+  
+  Serial.print("Moisture: ");
+  Serial.print(moistureValue);
+  Serial.print(" | Tank Distance: ");
+  Serial.println(tankDistance);
+
+  // Determine moisture state
+  int moistureState = 0; // 0 = high, 1 = mid, 2 = low
+
+  if (moistureValue < moistureThresholdHigh) {
+    moistureState = 0;  // High Moisture
+  } else if (moistureValue >= moistureThresholdHigh && moistureValue <= moistureThresholdLow) {
+    moistureState = 1;  // Medium Moisture
+  } else {
+    moistureState = 2;  // Low Moisture
+  }
+
+  bool pumpStateChanged = false;
+
+  // Check the conditions to control the pump
+  if (moistureState == 2 && tankDistance <= tankDistanceThreshold && !lastPumpState) {
+    // Low moisture and tank level is also low, don't turn on pump
+    lcd.setCursor(0, 0);
+    lcd.print("Low Moisture & Tank");
+    lcd.setCursor(0, 1);
+    lcd.print("Water level LOW");
+    sendSMS("Water Pump cannot be turned ON. Moisture is low but tank is empty.");
+  } else if (moistureState == 2 && tankDistance > tankDistanceThreshold && !lastPumpState) {
+    // Low moisture but sufficient water in the tank
+    digitalWrite(2, LOW);  // Turn on the pump
+    lcd.setCursor(0, 0);
+    lcd.print("Water Pump is ON ");
+    sendSMS("Water Pump is ON. Moisture is LOW and tank has sufficient water.");
+    pumpStateChanged = true;
+  } else if (moistureState <= 1 && lastPumpState) {
+    // Adequate moisture, turn off the pump
+    digitalWrite(2, HIGH);  // Turn off the pump
+    lcd.setCursor(0, 0);
+    lcd.print("Water Pump is OFF");
+    sendSMS("Water Pump is OFF. Moisture is adequate.");
+    pumpStateChanged = true;
+  }
+
+  // Send moisture and tank status updates only when changed
+  if (moistureState != lastMoisture) {
+    lastMoisture = moistureState;  // Update moisture state for comparison
+    lcd.setCursor(0, 1);
+    if (moistureState == 0) {
+      lcd.print("Moisture : HIGH ");
+      sendSMS("Moisture level is HIGH.");
+    } else if (moistureState == 1) {
+      lcd.print("Moisture : MID  ");
+      sendSMS("Moisture level is MID.");
+    } else {
+      lcd.print("Moisture : LOW  ");
+      sendSMS("Moisture level is LOW.");
+    }
+  }
+
+  // Store pump state for the next cycle
+  lastPumpState = (moistureState == 2 && tankDistance > tankDistanceThreshold);  // If moisture is low and tank has water, pump is ON
+
+  delay(5000); // Wait for 5 seconds before reading again
+}
+
+// Function to check GSM module
+bool testGSM() {
+  gsm.println("AT"); // Send AT command
+  delay(1000);
+  if (gsm.find("OK")) { // If the module responds with OK
+    gsm.println("AT+CSQ"); // Check signal quality
+    delay(1000);
+    if (gsm.find("+CSQ:")) { // Check if signal quality is good
+      gsm.println("AT+CMGF=1"); // Set SMS to Text Mode
+      delay(1000);
+      return true;
+    }
+  }
+  return false; // GSM initialization failed
+}
+
+// Function to send SMS
+void sendSMS(String message) {
+  gsm.println("AT+CMGS=\"+1234567890\""); // Replace with recipient's phone number
+  delay(1000);
+  gsm.print(message); // Send the message
+  delay(500); // Wait for message input
+  gsm.write(26); // Send Ctrl+Z to transmit the SMS
+  delay(5000); // Wait for the message to send
+}
+
+// Function to get the water level from ultrasonic sensor
+int getWaterLevel() {
+  // Send a pulse to trigger the ultrasonic sensor
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  
+  // Measure the duration of the echo pulse
+  long duration = pulseIn(echoPin, HIGH);
+  
+  // Calculate the distance based on the duration
+  // Speed of sound is 343 meters per second or 0.0343 cm per microsecond
+  int distance = duration * 0.0343 / 2;  // Divide by 2 because the pulse travels to the object and back
+  
+  return distance; // Return the distance in cm
+}
