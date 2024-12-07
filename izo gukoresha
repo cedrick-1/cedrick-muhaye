@@ -1,0 +1,137 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <BlynkSimpleEsp8266.h>
+#include <DHT.h>
+
+// Pin Definitions
+#define TRIG_PIN D1
+#define ECHO_PIN D2
+#define SOIL_MOISTURE_PIN A0
+#define DHT_PIN D3
+#define RELAY_PIN D4
+
+// Constants
+#define DHT_TYPE DHT11
+#define MIN_DISTANCE 2   // Distance when the tank is full (cm)
+#define MAX_DISTANCE 20  // Distance when the tank is empty (cm)
+#define MOISTURE_THRESHOLD 40   // Soil moisture in percentage
+
+// Objects
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+DHT dht(DHT_PIN, DHT_TYPE);
+char auth[] = "YourBlynkAuthToken";
+char ssid[] = "YourWiFiSSID";
+char pass[] = "YourWiFiPassword";
+
+// Variables
+bool manualControl = false;  // Flag to track manual control
+
+void setup() {
+  // Initialize Serial Monitor
+  Serial.begin(115200);
+
+  // Initialize LCD, DHT, Blynk
+  lcd.init();
+  lcd.backlight();
+  dht.begin();
+  Blynk.begin(auth, ssid, pass);
+
+  // Initialize Relay
+  pinMode(RELAY_PIN, OUTPUT);
+  digitalWrite(RELAY_PIN, HIGH); // Pump OFF
+
+  // Initialize Ultrasonic Sensor
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+}
+
+// Blynk function to handle manual pump control
+BLYNK_WRITE(V5) {
+  manualControl = param.asInt();  // Get the button state
+  if (manualControl) {
+    digitalWrite(RELAY_PIN, LOW);  // Turn pump ON
+    lcd.setCursor(0, 1);
+    lcd.print("Manual: Pump ON   ");
+    Blynk.notify("Pump manually activated.");
+  } else {
+    digitalWrite(RELAY_PIN, HIGH); // Turn pump OFF
+    lcd.setCursor(0, 1);
+    lcd.print("Manual: Pump OFF  ");
+    Blynk.notify("Pump manually deactivated.");
+  }
+}
+
+void loop() {
+  Blynk.run();
+
+  if (!manualControl) {
+    // Measure Soil Moisture
+    int soilMoisture = analogRead(SOIL_MOISTURE_PIN);
+    int moisturePercent = map(soilMoisture, 1023, 0, 0, 100);
+
+    // Measure Water Level
+    long duration, distance;
+    digitalWrite(TRIG_PIN, LOW);
+    delayMicroseconds(2);
+    digitalWrite(TRIG_PIN, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(TRIG_PIN, LOW);
+    duration = pulseIn(ECHO_PIN, HIGH);
+    distance = duration * 0.034 / 2; // Convert to cm
+
+    // Calculate Water Level Percentage
+    int waterLevelPercent = map(constrain(distance, MIN_DISTANCE, MAX_DISTANCE), MAX_DISTANCE, MIN_DISTANCE, 0, 100);
+
+    // Measure Temperature and Humidity
+    float temperature = dht.readTemperature();
+    float humidity = dht.readHumidity();
+
+    // Display on LCD
+    lcd.setCursor(0, 0);
+    lcd.print("T:");  // Temperature
+    lcd.print(temperature);
+    lcd.print("C ");
+    lcd.print("H:");  // Humidity
+    lcd.print(humidity);
+    lcd.print("%");
+
+    lcd.setCursor(0, 1);
+    lcd.print("M:");  // Soil Moisture
+    lcd.print(moisturePercent);
+    lcd.print("% ");
+    lcd.print("W:");  // Water Level
+    lcd.print(waterLevelPercent);
+    lcd.print("%");
+
+    // Check Water Level and Soil Moisture
+    if (waterLevelPercent <= 0) {
+      Blynk.notify("Insufficient water in tank.");
+      lcd.setCursor(0, 1);
+      lcd.print("W:0% Tank Empty");
+      digitalWrite(RELAY_PIN, HIGH); // Ensure Pump is OFF
+    } else if (moisturePercent < MOISTURE_THRESHOLD) {
+      digitalWrite(RELAY_PIN, LOW); // Pump ON
+      Blynk.notify("Irrigation started.");
+      lcd.setCursor(0, 1);
+      lcd.print("M:");
+      lcd.print(moisturePercent);
+      lcd.print("% Pump ON    ");
+    } else {
+      digitalWrite(RELAY_PIN, HIGH); // Pump OFF
+      Blynk.notify("Irrigation completed.");
+      lcd.setCursor(0, 1);
+      lcd.print("M:");
+      lcd.print(moisturePercent);
+      lcd.print("% Pump OFF   ");
+    }
+
+    // Send Data to Blynk
+    Blynk.virtualWrite(V1, temperature);
+    Blynk.virtualWrite(V2, humidity);
+    Blynk.virtualWrite(V3, moisturePercent);
+    Blynk.virtualWrite(V4, waterLevelPercent);
+
+    // Small Delay
+    delay(2000);
+  }
+}
