@@ -1,0 +1,175 @@
+#include <LiquidCrystal_I2C.h>
+#include <SoftwareSerial.h>
+#include <DHT.h>
+
+#define DHTPIN 7     // Pin where the DHT11 sensor is connected
+#define DHTTYPE DHT11 // DHT11 sensor type
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+SoftwareSerial gsm(10, 11); // RX, TX for GSM module
+DHT dht(DHTPIN, DHTTYPE);
+
+int lastMoisture = -1;  // Last moisture reading
+bool lastPumpState = false;  // Pump OFF initially
+unsigned long lastSMSMillis = 0;
+const unsigned long SMSInterval = 60000; // Interval for sending combined SMS
+
+bool manualControlEnabled = false; // Flag for manual control mode
+
+void setup() {
+  Serial.begin(9600);
+  gsm.begin(9600); // Initialize GSM module
+
+  lcd.init();
+  lcd.backlight();
+  lcd.clear();
+
+  dht.begin(); // Initialize DHT sensor
+
+  pinMode(2, OUTPUT);
+  digitalWrite(2, HIGH); // Turn off pump initially
+  delay(1000);
+
+  lcd.setCursor(0, 0);
+  lcd.print("IRRIGATION");
+  lcd.setCursor(0, 1);
+  lcd.print("SYSTEM IS ON");
+  delay(3000);
+  lcd.clear();
+
+  // Test GSM module communication
+  if (testGSM()) {
+    sendSMS("Irrigation System is ON");
+  } else {
+    lcd.setCursor(0, 0);
+    lcd.print("GSM ERROR");
+    while (1); // Stop execution if GSM fails
+  }
+}
+
+void loop() {
+  // Check for incoming SMS and process it
+  checkIncomingSMS();
+
+  // If manual control is enabled, skip automatic control
+  if (manualControlEnabled) {
+    delay(5000);
+    return;
+  }
+
+  int value = analogRead(A0);
+  Serial.println(value);
+
+  float temperature = dht.readTemperature();
+  float humidity = dht.readHumidity();
+
+  if (isnan(temperature) || isnan(humidity)) {
+    Serial.println("Failed to read from DHT sensor!");
+    lcd.setCursor(0, 0);
+    lcd.print("DHT ERROR");
+    delay(2000);
+    lcd.clear();
+    return;
+  }
+
+  lcd.setCursor(0, 0);
+  lcd.print("Temp: ");
+  lcd.print(temperature);
+  lcd.print("C");
+
+  lcd.setCursor(0, 1);
+  lcd.print("Hum: ");
+  lcd.print(humidity);
+  lcd.print("%");
+
+  int moistureState = (value < 300) ? 0 : (value <= 950) ? 1 : 2;
+
+  if (value > 950 && !lastPumpState) {
+    digitalWrite(2, LOW);  // Turn on the pump
+    lastPumpState = true;
+  } else if (value <= 950 && lastPumpState) {
+    digitalWrite(2, HIGH);  // Turn off the pump
+    lastPumpState = false;
+  }
+
+  lastMoisture = moistureState;
+
+  if (millis() - lastSMSMillis >= SMSInterval) {
+    sendCombinedSMS(value, temperature, humidity, lastPumpState);
+    lastSMSMillis = millis();
+  }
+
+  delay(5000);
+}
+
+// Function to check GSM module
+bool testGSM() {
+  gsm.println("AT");
+  delay(1000);
+  if (gsm.find("OK")) {
+    gsm.println("AT+CSQ");
+    delay(1000);
+    if (gsm.find("+CSQ:")) {
+      gsm.println("AT+CMGF=1"); // Set SMS to Text Mode
+      delay(1000);
+      gsm.println("AT+CNMI=1,2,0,0,0"); // Configure to receive SMS immediately
+      delay(1000);
+      return true;
+    }
+  }
+  return false;
+}
+
+// Function to send SMS
+void sendSMS(String message) {
+  gsm.println("AT+CMGS=\"+250791523780\""); // Replace with recipient's phone number
+  delay(1000);
+  gsm.print(message);
+  delay(500);
+  gsm.write(26); // Send Ctrl+Z to transmit the SMS
+  delay(5000);
+}
+
+// Function to send combined SMS
+void sendCombinedSMS(int moisture, float temperature, float humidity, bool pumpState) {
+  String moistureLevel = (moisture < 300) ? "HIGH" : (moisture <= 950) ? "MID" : "LOW";
+  String pumpStatus = pumpState ? "ON" : "OFF";
+
+  String message = "Irrigation Status:\n";
+  message += "Pump: " + pumpStatus + "\n";
+  message += "Moisture: " + moistureLevel + "\n";
+  message += "Temperature: " + String(temperature) + "C\n";
+  message += "Humidity: " + String(humidity) + "%";
+
+  sendSMS(message);
+}
+
+// Function to check and process incoming SMS
+void checkIncomingSMS() {
+  if (gsm.available()) {
+    String message = gsm.readString();
+    Serial.println("Received SMS: " + message);
+
+    if (message.indexOf("PUMP ON") >= 0) {
+      manualControlEnabled = true;
+      digitalWrite(2, LOW);  // Turn on the pump
+      sendSMS("Pump turned ON manually.");
+      lcd.setCursor(0, 0);
+      lcd.print("Pump: MANUAL ON ");
+    } else if (message.indexOf("PUMP OFF") >= 0) {
+      manualControlEnabled = true;
+      digitalWrite(2, HIGH);  // Turn off the pump
+      sendSMS("Pump turned OFF manually.");
+      lcd.setCursor(0, 0);
+      lcd.print("Pump: MANUAL OFF");
+    } else if (message.indexOf("AUTO") >= 0) {
+      manualControlEnabled = false;
+      sendSMS("System set to automatic mode.");
+      lcd.setCursor(0, 0);
+      lcd.print("Mode: AUTOMATIC ");
+    }
+
+    delay(2000); // Delay to allow GSM module to process the message
+    lcd.clear();
+  }
+}
