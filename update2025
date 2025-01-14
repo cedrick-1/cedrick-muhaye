@@ -1,0 +1,163 @@
+#include <LiquidCrystal_I2C.h>
+#include <SoftwareSerial.h>
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+SoftwareSerial gsm(10, 11); // RX, TX for GSM module
+
+// Variables to track the last state of the system
+int lastMoisture = -1;
+bool lastPumpState = false;
+bool manualMode = false; // Flag to track manual control mode
+
+void setup() {
+  Serial.begin(9600);
+  gsm.begin(9600); // Initialize GSM module
+
+  lcd.init();
+  lcd.backlight();
+  lcd.clear();
+
+  pinMode(2, OUTPUT);
+  digitalWrite(2, HIGH); // Turn off pump initially
+  delay(1000);
+
+  lcd.setCursor(0, 0);
+  lcd.print("IRRIGATION");
+  lcd.setCursor(0, 1);
+  lcd.print("SYSTEM IS ON");
+  delay(3000);
+  lcd.clear();
+
+  // Test GSM module communication
+  if (testGSM()) {
+    sendSMS("Irrigation System is ON");
+  } else {
+    lcd.setCursor(0, 0);
+    lcd.print("GSM ERROR");
+    while (1); // Stop execution if GSM fails
+  }
+}
+
+void loop() {
+  // Check for incoming SMS
+  if (gsm.available()) {
+    String message = readSMS(); // Read incoming SMS
+    handleSMS(message);         // Handle SMS commands
+  }
+
+  if (!manualMode) { // Automatic mode: moisture-based control
+    int value = analogRead(A0);
+    Serial.println(value);
+
+    // Define moisture levels
+    int moistureState = 0; // 0 = high, 1 = mid, 2 = low
+
+    // Determine the moisture level
+    if (value < 300) {
+      moistureState = 0;  // High Moisture
+    } else if (value >= 300 && value <= 950) {
+      moistureState = 1;  // Medium Moisture
+    } else {
+      moistureState = 2;  // Low Moisture
+    }
+
+    // Check for changes in pump state and moisture level
+    if (value > 950 && !lastPumpState) {  // If moisture is low and pump was off
+      digitalWrite(2, LOW);  // Turn on the pump
+      lcd.setCursor(0, 0);
+      lcd.print("Water Pump is ON ");
+      sendSMS("Water Pump is ON. Moisture is LOW.");
+    } else if (value <= 950 && lastPumpState) {  // If moisture is adequate and pump was on
+      digitalWrite(2, HIGH);  // Turn off the pump
+      lcd.setCursor(0, 0);
+      lcd.print("Water Pump is OFF");
+      sendSMS("Water Pump is OFF. Moisture is adequate.");
+    }
+
+    // Send a message only if the moisture level changes
+    if (moistureState != lastMoisture) {
+      lastMoisture = moistureState;  // Update moisture state for comparison
+
+      lcd.setCursor(0, 1);
+      if (moistureState == 0) {
+        lcd.print("Moisture : HIGH ");
+        sendSMS("Moisture level is HIGH.");
+      } else if (moistureState == 1) {
+        lcd.print("Moisture : MID  ");
+        sendSMS("Moisture level is MID.");
+      } else {
+        lcd.print("Moisture : LOW  ");
+        sendSMS("Moisture level is LOW.");
+      }
+    }
+
+    lastPumpState = (value > 950);  // Update pump state
+    delay(5000);                    // Wait for 5 seconds before reading again
+  }
+}
+
+// Function to handle SMS commands
+void handleSMS(String message) {
+  message.trim(); // Remove any leading or trailing spaces
+  message.toUpperCase(); // Convert to uppercase for case-insensitive comparison
+
+  if (message == "PUMP ON") {
+    digitalWrite(2, LOW); // Turn on the pump
+    lcd.setCursor(0, 0);
+    lcd.print("Water Pump is ON ");
+    sendSMS("Pump manually turned ON.");
+    manualMode = true; // Enable manual mode
+  } else if (message == "PUMP OFF") {
+    digitalWrite(2, HIGH); // Turn off the pump
+    lcd.setCursor(0, 0);
+    lcd.print("Water Pump is OFF");
+    sendSMS("Pump manually turned OFF.");
+    manualMode = true; // Enable manual mode
+  } else if (message == "AUTO") {
+    manualMode = false; // Switch back to automatic mode
+    lcd.setCursor(0, 0);
+    lcd.print("AUTO MODE ACTIVE");
+    sendSMS("System is now in AUTO mode.");
+  } else {
+    sendSMS("Invalid command. Use PUMP ON, PUMP OFF, or AUTO.");
+  }
+}
+
+// Function to read SMS
+String readSMS() {
+  String message = "";
+  while (gsm.available()) {
+    char c = gsm.read();
+    if (c == '\n' || c == '\r') break; // End of message
+    message += c;
+  }
+  return message;
+}
+
+// Function to check GSM module
+bool testGSM() {
+  gsm.println("AT");
+  delay(1000);
+  if (gsm.find("OK")) {
+    gsm.println("AT+CSQ"); // Check signal quality
+    delay(1000);
+    if (gsm.find("+CSQ:")) {
+      gsm.println("AT+CMGF=1"); // Set SMS to Text Mode
+      delay(1000);
+      gsm.println("AT+CNMI=1,2,0,0,0"); // Immediate SMS reception
+      delay(1000);
+      return true;
+    }
+  }
+  return false;
+}
+
+// Function to send SMS
+void sendSMS(String message) {
+  gsm.println("AT+CMGS=\"+250791523780\""); // Replace with recipient's phone number
+  delay(1000);
+  gsm.print(message); // Send the message
+  delay(500);
+  gsm.write(26); // Send Ctrl+Z to transmit the SMS
+  delay(5000);
+}
