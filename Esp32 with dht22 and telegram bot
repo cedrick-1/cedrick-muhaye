@@ -1,0 +1,57 @@
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <UniversalTelegramBot.h>
+#include <DHT.h>
+
+#define DHTPIN 4
+#define DHTTYPE DHT22
+DHT dht(DHTPIN, DHTTYPE);
+
+const char* ssid = "YOUR_SSID";
+const char* password = "YOUR_PASSWORD";
+const char* botToken = "YOUR_BOT_TOKEN";
+const int chat_id = YOUR_CHAT_ID;
+
+WiFiClientSecure client;
+UniversalTelegramBot bot(botToken, client);
+unsigned long lastTimeBotRan;
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+  WiFi.begin(ssid, password);
+  client.setInsecure();
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting...");
+  }
+  Serial.println("Connected to Wi-Fi");
+}
+
+void loop() {
+  if (millis() - lastTimeBotRan > 10000) {
+    int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+    while(numNewMessages) {
+      handleNewMessages(numNewMessages);
+      numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+    }
+    lastTimeBotRan = millis();
+  }
+}
+
+void handleNewMessages(int numNewMessages) {
+  for (int i=0; i<numNewMessages; i++) {
+    String text = bot.messages[i].text;
+    String chat_id = bot.messages[i].chat_id;
+
+    if (text == "/start") {
+      bot.sendMessage(chat_id, "Welcome! Use /read to get data", "");
+    } else if (text == "/read") {
+      float t = dht.readTemperature();
+      float h = dht.readHumidity();
+      String message = "🌡 Temp: " + String(t) + "°C\n💧 Humidity: " + String(h) + "%";
+      bot.sendMessage(chat_id, message, "");
+    }
+  }
+}
